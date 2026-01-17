@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+langchain-core
+langchain-groq
+langchain-text-splitters
+pypdf
+python-docx
+openpyxl
+python-multipart
+requests

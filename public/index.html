@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>Enterprise RAG</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 flex h-screen">
+    <!-- Sidebar -->
+    <div class="w-64 bg-white border-r p-4 flex flex-col">
+        <h2 class="font-bold text-xl mb-6">RAG Agent</h2>
+        <input type="file" id="fileIn" class="hidden" multiple onchange="upload()">
+        <button onclick="document.getElementById('fileIn').click()" class="bg-blue-600 text-white p-2 rounded mb-4">Upload Docs</button>
+        <div id="status" class="text-xs text-gray-500"></div>
+    </div>
+    <!-- Chat -->
+    <div class="flex-1 flex flex-col">
+        <div id="chat" class="flex-1 p-6 overflow-y-auto space-y-4"></div>
+        <div class="p-4 border-t bg-white">
+            <div class="max-w-4xl mx-auto flex gap-2">
+                <input type="text" id="msg" class="flex-1 border p-2 rounded-lg" placeholder="Ask about your docs...">
+                <button onclick="send()" class="bg-blue-600 text-white px-4 rounded-lg">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let history = [];
+        async function upload() {
+            const files = document.getElementById('fileIn').files;
+            const status = document.getElementById('status');
+            for(let f of files) {
+                let fd = new FormData(); fd.append('file', f);
+                status.innerText = `Uploading ${f.name}...`;
+                await fetch('/api/upload', { method: 'POST', body: fd });
+            }
+            status.innerText = "All files indexed.";
+        }
+
+        async function send() {
+            const input = document.getElementById('msg');
+            const chat = document.getElementById('chat');
+            const query = input.value; 
+            chat.innerHTML += `<div class="text-right"><b>You:</b> ${query}</div>`;
+            input.value = "";
+
+            const res = await fetch('/api/query', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ query, chat_history: history })
+            });
+            const data = await res.json();
+            chat.innerHTML += `<div class="text-left bg-gray-100 p-2 rounded"><b>AI:</b> ${data.response}</div>`;
+            history.push({role: "user", content: query}, {role: "assistant", content: data.response});
+        }
+    </script>
+</body>
+</html>
