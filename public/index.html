@@ -1,56 +1,185 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8"><title>Enterprise RAG</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArM Bot | Enterprise RAG</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); }
+        /* Smooth scrolling for chat window */
+        #chat { scroll-behavior: smooth; }
+        /* Hide scrollbar but keep functionality */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
 </head>
-<body class="bg-slate-50 flex h-screen">
-    <!-- Sidebar -->
-    <div class="w-64 bg-white border-r p-4 flex flex-col">
-        <h2 class="font-bold text-xl mb-6">RAG Agent</h2>
-        <input type="file" id="fileIn" class="hidden" multiple onchange="upload()">
-        <button onclick="document.getElementById('fileIn').click()" class="bg-blue-600 text-white p-2 rounded mb-4">Upload Docs</button>
-        <div id="status" class="text-xs text-gray-500"></div>
-    </div>
-    <!-- Chat -->
-    <div class="flex-1 flex flex-col">
-        <div id="chat" class="flex-1 p-6 overflow-y-auto space-y-4"></div>
-        <div class="p-4 border-t bg-white">
-            <div class="max-w-4xl mx-auto flex gap-2">
-                <input type="text" id="msg" class="flex-1 border p-2 rounded-lg" placeholder="Ask about your docs...">
-                <button onclick="send()" class="bg-blue-600 text-white px-4 rounded-lg">Send</button>
+<body class="bg-[#F8FAFC] text-slate-900 h-screen flex overflow-hidden">
+
+    <!-- SIDEBAR -->
+    <aside class="w-72 bg-slate-900 flex flex-col shadow-2xl z-20">
+        <div class="p-6">
+            <div class="flex items-center gap-3 mb-8">
+                <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                </div>
+                <h1 class="text-white font-bold text-xl tracking-tight">ArM Bot</h1>
+            </div>
+
+            <div class="space-y-6">
+                <div>
+                    <p class="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">Knowledge Base</p>
+                    <input type="file" id="fileIn" class="hidden" multiple onchange="upload()">
+                    <button onclick="document.getElementById('fileIn').click()" 
+                        class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium py-3 px-4 rounded-xl transition-all border border-slate-700 flex items-center justify-center gap-2 group">
+                        <svg class="w-5 h-5 group-hover:-translate-y-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                        Upload Documents
+                    </button>
+                </div>
+
+                <div id="statusContainer" class="hidden">
+                    <div class="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+                        <div id="status" class="text-xs text-slate-300 leading-relaxed"></div>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
+
+        <div class="mt-auto p-6 border-t border-slate-800">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-full bg-slate-700"></div>
+                <div>
+                    <p class="text-xs font-semibold text-white">System Status</p>
+                    <p class="text-[10px] text-green-400 flex items-center gap-1">
+                        <span class="w-1.5 h-1.5 bg-green-400 rounded-full"></span> Online
+                    </p>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 flex flex-col bg-white relative">
+        <!-- HEADER -->
+        <header class="h-16 border-b flex items-center justify-between px-8 glass sticky top-0 z-10">
+            <div class="flex items-center gap-4">
+                <span class="text-sm font-semibold text-slate-700">Enterprise RAG Agent</span>
+            </div>
+        </header>
+
+        <!-- CHAT WINDOW -->
+        <div id="chat" class="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
+            <!-- AI Welcome Message -->
+            <div class="flex gap-4 max-w-3xl">
+                <div class="w-8 h-8 rounded-lg bg-blue-100 flex-shrink-0 flex items-center justify-center text-blue-600 font-bold text-xs">AI</div>
+                <div class="bg-slate-100 rounded-2xl rounded-tl-none p-4 text-slate-700 text-sm leading-relaxed border border-slate-200 shadow-sm">
+                    Hello! I'm ready to help. Upload your documents to the sidebar, and I'll analyze them for you. What would you like to know?
+                </div>
+            </div>
+        </div>
+
+        <!-- INPUT AREA -->
+        <div class="p-8">
+            <div class="max-w-3xl mx-auto relative group">
+                <div class="absolute inset-0 bg-blue-500/5 rounded-2xl blur-xl group-focus-within:bg-blue-500/10 transition-all"></div>
+                <div class="relative bg-white border border-slate-200 rounded-2xl shadow-xl flex items-center p-2 focus-within:border-blue-500/50 transition-all">
+                    <input type="text" id="msg" 
+                        class="flex-1 bg-transparent border-none outline-none px-4 py-3 text-sm text-slate-700 placeholder:text-slate-400" 
+                        placeholder="Ask a question..."
+                        onkeypress="if(event.key === 'Enter') send()">
+                    
+                    <button onclick="send()" 
+                        class="bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-xl shadow-lg shadow-blue-500/20 transition-all active:scale-95">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                    </button>
+                </div>
+                <p class="text-center text-[10px] text-slate-400 mt-4 italic">Response based on indexed documents and AI context</p>
+            </div>
+        </div>
+    </main>
 
     <script>
         let history = [];
+        const chat = document.getElementById('chat');
+        const status = document.getElementById('status');
+        const statusContainer = document.getElementById('statusContainer');
+        const input = document.getElementById('msg');
+
+        function scrollToBottom() {
+            chat.scrollTop = chat.scrollHeight;
+        }
+
         async function upload() {
             const files = document.getElementById('fileIn').files;
-            const status = document.getElementById('status');
+            statusContainer.classList.remove('hidden');
+            
             for(let f of files) {
-                let fd = new FormData(); fd.append('file', f);
-                status.innerText = `Uploading ${f.name}...`;
-                await fetch('/api/upload', { method: 'POST', body: fd });
+                let fd = new FormData(); 
+                fd.append('file', f);
+                status.innerHTML = `<span class="flex items-center gap-2"><svg class="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83" stroke-width="2" stroke-linecap="round"/></svg> Indexing: ${f.name}...</span>`;
+                
+                try {
+                    await fetch('/api/upload', { method: 'POST', body: fd });
+                } catch (e) {
+                    status.innerText = "❌ Upload failed.";
+                    return;
+                }
             }
-            status.innerText = "All files indexed.";
+            status.innerHTML = "✅ All documents indexed successfully.";
         }
 
         async function send() {
-            const input = document.getElementById('msg');
-            const chat = document.getElementById('chat');
-            const query = input.value; 
-            chat.innerHTML += `<div class="text-right"><b>You:</b> ${query}</div>`;
-            input.value = "";
+            const query = input.value.trim();
+            if(!query) return;
 
-            const res = await fetch('/api/query', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ query, chat_history: history })
-            });
-            const data = await res.json();
-            chat.innerHTML += `<div class="text-left bg-gray-100 p-2 rounded"><b>AI:</b> ${data.response}</div>`;
-            history.push({role: "user", content: query}, {role: "assistant", content: data.response});
+            // Add User Message
+            chat.innerHTML += `
+                <div class="flex justify-end gap-4">
+                    <div class="bg-blue-600 text-white rounded-2xl rounded-tr-none p-4 text-sm shadow-md shadow-blue-500/20 max-w-[80%]">
+                        ${query}
+                    </div>
+                </div>`;
+            
+            input.value = "";
+            scrollToBottom();
+
+            // Add AI Thinking Placeholder
+            const thinkingId = 'ai-' + Date.now();
+            chat.innerHTML += `
+                <div id="${thinkingId}" class="flex gap-4 max-w-3xl animate-pulse">
+                    <div class="w-8 h-8 rounded-lg bg-blue-100 flex-shrink-0 flex items-center justify-center text-blue-600 font-bold text-xs">AI</div>
+                    <div class="bg-slate-100 rounded-2xl rounded-tl-none p-4 text-slate-400 text-sm border border-slate-200 italic">
+                        Searching documents...
+                    </div>
+                </div>`;
+            scrollToBottom();
+
+            try {
+                const res = await fetch('/api/query', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ query, chat_history: history })
+                });
+                const data = await res.json();
+                
+                // Replace thinking placeholder with real response
+                const thinkingDiv = document.getElementById(thinkingId);
+                thinkingDiv.classList.remove('animate-pulse');
+                thinkingDiv.innerHTML = `
+                    <div class="w-8 h-8 rounded-lg bg-blue-100 flex-shrink-0 flex items-center justify-center text-blue-600 font-bold text-xs">AI</div>
+                    <div class="bg-white border border-slate-200 rounded-2xl rounded-tl-none p-4 text-slate-700 text-sm shadow-sm leading-relaxed">
+                        ${data.response}
+                    </div>`;
+                
+                history.push({role: "user", content: query}, {role: "assistant", content: data.response});
+            } catch (e) {
+                document.getElementById(thinkingId).innerText = "Error: Could not reach the AI.";
+            }
+            scrollToBottom();
         }
     </script>
 </body>
