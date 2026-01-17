@@ -1,68 +1,273 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-import traceback
+import io
+import os
+import pandas as pd
+from typing import Annotated, List, Set, Dict, Any
 from pydantic import BaseModel
-from typing import List
 
-# INTERNAL IMPORTS - Notice we only import get_response
-from api.core.agent import get_response
-from api.core.database import add_documents_to_store
-from api.utils.parser import parse_file
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pypdf import PdfReader
+from docx import Document as DocxDocument
+import traceback
+
+# --- LangChain Imports ---
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_groq import ChatGroq
+from langchain.agents import initialize_agent, AgentType
+from langchain.tools import Tool
+from langchain_core.documents import Document
+from langchain.memory import ConversationBufferMemory
 
 
-class _SimpleDoc:
-    def __init__(self, text: str):
-        self.page_content = text
-
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
+# -----------------------------
+# DATA MODELS
+# -----------------------------
 class Message(BaseModel):
     role: str
     content: str
 
 class QueryRequest(BaseModel):
     query: str
-    chat_history: List[Message]
+    chat_history: List[Message] = []
 
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}
+# -----------------------------
+# 1. SETUP & CONFIGURATION
+# -----------------------------
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
-@app.post("/api/query")
-async def query(request: QueryRequest):
+# Global Set to track filenames
+uploaded_filenames: Set[str] = set()
+
+# Initialize Embeddings
+embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+# Initialize Vector DB
+vector_store = Chroma(
+    persist_directory="/tmp/chroma_db",
+    embedding_function=embedding_model
+)
+try:
+    existing_data = vector_store.get()
+    if existing_data and existing_data.get('metadatas'):
+        for meta in existing_data['metadatas']:
+            if meta and 'source' in meta:
+                uploaded_filenames.add(meta['source'])
+    print(f"✅ Recovery Complete: Loaded {len(uploaded_filenames)} files from disk.")
+except Exception as e:
+    print(f"⚠️ Initial sync failed: {e}")
+
+# Initialize LLM (Groq)
+groq_api_key = os.getenv("GROQ_API_KEY", None)
+
+llm = ChatGroq(
+    temperature=0,
+    model_name="llama-3.1-8b-instant",
+    groq_api_key=groq_api_key
+)
+
+# -----------------------------
+# 2. AGENT MEMORY & TOOLS
+# -----------------------------
+
+# GLOBAL MEMORY
+memory = ConversationBufferMemory(
+    memory_key="chat_history",
+    return_messages=True
+)
+
+# TOOL 1: SMART SEARCH
+retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+
+def search_documents(query: str) -> str:
     try:
-        # We call get_response because that is what is in your agent.py
-        answer = get_response(request.query, request.chat_history)
-        return {"response": answer}
+        search_term = query
+        if len(query) < 4 or query.lower() in ["summary", "summarize", "it", "this"]:
+            search_term = "overview summary main points"
+
+        # Some Chroma wrappers expose a method like get_relevant_documents; using invoke to match provided sample
+        docs = retriever.invoke(search_term) if hasattr(retriever, 'invoke') else retriever.get_relevant_documents(search_term)
+        if not docs:
+            return "NO_RESULTS_FOUND. Tell the user you couldn't find that specific info in the uploaded docs."
+        return "\n\n".join([f"[Source: {getattr(d, 'metadata', {}).get('source', 'Unknown')} ]\n{getattr(d, 'page_content', '')}" for d in docs])
     except Exception as e:
-        return {"response": f"Internal Error: {str(e)}"}
+        return f"Error searching: {str(e)}"
 
+search_tool = Tool(
+    name="search_enterprise_documents",
+    func=search_documents,
+    description="Use this tool ONLY if the user asks a specific question about the uploaded document content."
+)
 
-@app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
+# TOOL 2: INVENTORY
+def list_files(query: str) -> str:
     try:
-        content = await file.read()
-        # parse_file is async and returns the extracted text
-        text = await parse_file(file.filename, content)
+        data = vector_store.get()
+        if not data or not data.get('metadatas'):
+            return "No documents found in the persistent knowledge base."
+        sources = {m.get('source') for m in data['metadatas'] if m.get('source')}
+        if not sources:
+            return "No documents found."
+        return "Current Files in Knowledge Base:\n" + "\n".join(f"- {name}" for name in sources)
+    except Exception as e:
+        return f"Error accessing inventory: {str(e)}"
 
-        # Split into chunks and wrap into objects that have `page_content`
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        parts = []
-        if hasattr(splitter, "split_text"):
-            parts = splitter.split_text(text) if text else []
+list_tool = Tool(
+    name="list_uploaded_files",
+    func=list_files,
+    description="Use this tool to see which documents are currently stored in the system.",
+)
+
+tools = [search_tool, list_tool]
+
+# FALLBACK HANDLER
+def fallback_handler(error):
+    error_str = str(error)
+    if "None is not a valid tool" in error_str:
+        return "Please answer the user directly using your general knowledge."
+    if "Could not parse LLM output: `" in error_str:
+        return error_str.split("Could not parse LLM output: `")[1].split("`")[0]
+    return "I apologize, but I encountered a temporary error. Please try again."
+
+system_message = """You are a helpful and intelligent AI Assistant.
+
+BEHAVIOR GUIDELINES:
+1. **Chat like a Human:** For greetings ("Hi"), general questions ("What is 2+2?", "Write python code"), or small talk, DO NOT use any tools. Just reply naturally using your own knowledge.
+2. **Use Context:** You have a memory. If the user says "Summarize it" or "Explain that", refer to the previous conversation or the uploaded documents.
+3. **Document Search:** Only use 'search_enterprise_documents' if the user specifically asks about the *uploaded files*.
+4. **Inventory:** Use 'list_uploaded_files' only when asked about file availability.
+
+If a tool returns "NO_RESULTS_FOUND", do not retry. Just apologize and say you couldn't find it in the documents.
+"""
+
+# INITIALIZE CONVERSATIONAL AGENT
+agent_executor = initialize_agent(
+    tools=tools,
+    llm=llm,
+    agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+    verbose=True,
+    memory=memory,
+    handle_parsing_errors=fallback_handler,
+    agent_kwargs={
+        "system_message": system_message
+    }
+)
+
+# -----------------------------
+# 3. FASTAPI APP
+# -----------------------------
+app = FastAPI(title="Enterprise Agentic RAG API", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# -----------------------------
+# 4. HELPER FUNCTIONS
+# -----------------------------
+async def parse_file(file: UploadFile, content: bytes) -> str:
+    ext = os.path.splitext(file.filename)[1].lower()
+    try:
+        if ext == ".pdf":
+            reader = PdfReader(io.BytesIO(content))
+            return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        elif ext == ".txt":
+            return content.decode("utf-8")
+        elif ext == ".csv":
+            df = pd.read_csv(io.BytesIO(content))
+            return df.to_string()
+        elif ext in [".xls", ".xlsx"]:
+            df = pd.read_excel(io.BytesIO(content))
+            return df.to_string()
+        elif ext in [".doc", ".docx"]:
+            doc = DocxDocument(io.BytesIO(content))
+            return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
         else:
-            # Fallback: don't split
-            parts = [text] if text else []
-
-        chunks = [_SimpleDoc(p) for p in parts]
-
-        # Add to vector store (in-memory list in this simple example)
-        add_documents_to_store(chunks, source_name=file.filename)
-
-        return {"status": "ok", "file": file.filename}
+            raise ValueError(f"Unsupported file type: {ext}")
     except Exception as e:
-        traceback.print_exc()
-        return {"status": "error", "detail": str(e)}
+        print(f"Error parsing file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse {ext} file: {str(e)}")
+
+
+# -----------------------------
+# 5. API ENDPOINTS
+# -----------------------------
+
+@app.get("/", tags=["System"])
+async def root():
+    return {"message": "Agentic RAG API is running."}
+
+@app.get("/architecture", tags=["Documentation"]) 
+async def get_architecture():
+    return {
+        "architecture_type": "Agentic RAG (Conversational Memory)",
+        "components": {
+            "llm": "Llama-3.1-8b (via Groq)",
+            "vector_store": "ChromaDB",
+            "memory": "ConversationBufferMemory",
+            "tools": ["Search", "Inventory"]
+        }
+    }
+
+@app.post("/upload_document", tags=["Ingestion"]) 
+async def upload_document(file: Annotated[UploadFile, File()]):
+    content = await file.read()
+    text = await parse_file(file, content)
+    
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="The file appears to be empty.")
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = text_splitter.create_documents([text])
+    
+    for chunk in chunks:
+        chunk.metadata["source"] = file.filename
+
+    if chunks:
+        vector_store.add_documents(chunks)
+        uploaded_filenames.add(file.filename)
+    
+    return {"status": "Successfully indexed and saved to disk."}
+
+@app.post("/query", tags=["Agentic Reasoning"]) 
+async def query_agent(request: QueryRequest):
+    query = request.query
+    history = request.chat_history
+
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+
+    try:
+        MAX_HISTORY_LENGTH = 6 
+        limited_history = history[-MAX_HISTORY_LENGTH:]
+
+        # Clear memory for single-session behavior
+        memory.chat_memory.clear()
+
+        for msg in limited_history:
+            if msg.role == "user":
+                memory.chat_memory.add_user_message(msg.content)
+            elif msg.role == "assistant":
+                memory.chat_memory.add_ai_message(msg.content)
+
+        response = agent_executor.invoke({"input": query})
+        final_output = response.get("output", "").strip()
+        
+        return {
+            "query": query,
+            "response": final_output
+        }
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        return {
+            "query": query, 
+            "response": "I encountered an error processing your request."
+        }
