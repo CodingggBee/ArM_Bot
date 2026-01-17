@@ -21,6 +21,9 @@ class QueryRequest(BaseModel):
     query: str
     chat_history: List[Message]
 
+@app.get("/")
+def root():
+    return {"message": "ArM Bot API is running!"}
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
