@@ -1,14 +1,7 @@
 fastapi
 uvicorn
-langchain
-langchain-groq
-langchain-text-splitters
-langchain-chroma
-langchain-huggingface
-chromadb
 pypdf
 python-docx
 openpyxl
 python-multipart
 requests
-pandas
