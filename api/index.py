@@ -10,6 +10,11 @@ from api.core.agent import get_response
 from api.core.database import add_documents_to_store
 from api.utils.parser import parse_file
 
+
+class _SimpleDoc:
+    def __init__(self, text: str):
+        self.page_content = text
+
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -34,3 +39,30 @@ async def query(request: QueryRequest):
         return {"response": answer}
     except Exception as e:
         return {"response": f"Internal Error: {str(e)}"}
+
+
+@app.post("/api/upload")
+async def upload(file: UploadFile = File(...)):
+    try:
+        content = await file.read()
+        # parse_file is async and returns the extracted text
+        text = await parse_file(file.filename, content)
+
+        # Split into chunks and wrap into objects that have `page_content`
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        parts = []
+        if hasattr(splitter, "split_text"):
+            parts = splitter.split_text(text) if text else []
+        else:
+            # Fallback: don't split
+            parts = [text] if text else []
+
+        chunks = [_SimpleDoc(p) for p in parts]
+
+        # Add to vector store (in-memory list in this simple example)
+        add_documents_to_store(chunks, source_name=file.filename)
+
+        return {"status": "ok", "file": file.filename}
+    except Exception as e:
+        traceback.print_exc()
+        return {"status": "error", "detail": str(e)}
