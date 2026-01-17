@@ -1,11 +1,14 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import traceback
+from pydantic import BaseModel
+from typing import List
+
+# INTERNAL IMPORTS - Notice we only import get_response
 from api.core.agent import get_response
 from api.core.database import add_documents_to_store
 from api.utils.parser import parse_file
-from pydantic import BaseModel
-from typing import List
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -18,19 +21,15 @@ class QueryRequest(BaseModel):
     query: str
     chat_history: List[Message]
 
-@app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
-    content = await file.read()
-    text = await parse_file(file.filename, content)
-    chunks = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=100).create_documents([text])
-    add_documents_to_store(chunks, file.filename)
-    return {"status": "success"}
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
 
 @app.post("/api/query")
 async def query(request: QueryRequest):
     try:
-        # Use the function you actually defined in agent.py
+        # We call get_response because that is what is in your agent.py
         answer = get_response(request.query, request.chat_history)
         return {"response": answer}
     except Exception as e:
-        return {"response": f"Error: {str(e)}"}
+        return {"response": f"Internal Error: {str(e)}"}
